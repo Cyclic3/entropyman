@@ -2,9 +2,9 @@
 _sometimes optimal hangman engine_
 
 ## Theory
-Ideally, we would like to take the path with the least entropy at each point.
-Unfortunately, the game tree is rather large, and so this becomes infeasible
-even at 2 letters.
+Ideally, we would like to take the path with the least remaining entropy at
+each point. Unfortunately, the game tree is rather large, and so this becomes
+infeasible even at 2 letters.
 
 As such, we make an estimation of the entropy at each point, by recursively
 calculating probability-weighted best-path entropy, all the way down to some
