@@ -19,11 +19,6 @@ namespace entropyman {
   private:
     struct NodeSpec;
     class Node;
-    template<typename T>
-    static constexpr bool node_comparable_v = std::is_same_v<std::decay_t<T>, Optimiser::Node> || std::is_same_v<std::decay_t<T>, Optimiser::NodeSpec>;
-
-    template<typename A, typename B>
-    friend std::enable_if_t<node_comparable_v<A> && node_comparable_v<B>, std::strong_ordering> operator<=>(A const& a, B const& b);
 
     using cache_t = std::map<NodeSpec, std::weak_ptr<Node>, std::less<>>;
     static void clean_cache(cache_t& cache) {
@@ -266,8 +261,10 @@ namespace entropyman {
     static constexpr auto opt_cmp = [](std::shared_ptr<Node> const& i, std::shared_ptr<Node> const& j) {
       if (i == j)
         return false;
-      // <= so that
-      return i->get_remaining_entropy() <= j->get_remaining_entropy();
+      auto _1 = i->get_remaining_entropy() <=> j->get_remaining_entropy();
+      if (!std::is_eq(_1))
+        return std::is_lt(_1);
+      return i < j;
     };
     using opt_queue_t = std::set<std::shared_ptr<Node>, decltype(opt_cmp)>;
   public:
@@ -291,7 +288,6 @@ namespace entropyman {
       opt_queue_t opt_queue{root};
 
       auto start = std::chrono::steady_clock::now();
-      std::chrono::steady_clock::time_point stop;
       static constexpr std::chrono::seconds think_time{5};
 
       for (uint64_t step = 0; !opt_queue.empty() && (step % 1000 != 0 || std::chrono::steady_clock::now() - start < think_time); ++step) {
@@ -313,15 +309,4 @@ namespace entropyman {
       root = std::make_shared<Node>(state.partial_word, state.remaining_letters, state.remaining_lives, std::move(words));
     }
   };
-
-  template<typename A, typename B>
-  constexpr std::enable_if_t<Optimiser::node_comparable_v<A> && Optimiser::node_comparable_v<B>, std::strong_ordering> operator<=>(A const& a, B const& b) {
-    auto _1 = a.remaining_lives <=> b.remaining_lives;
-    if (!std::is_eq(_1))
-      return _1;
-    else
-      return a.knowledge <=> b.knowledge;
-  }
-
-
 }
