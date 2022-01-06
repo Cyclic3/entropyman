@@ -2,118 +2,19 @@
 
 #include "gamestate.hpp"
 
-//#include <map>
-//#include <ranges>
+#include <chrono>
 #include <cmath>
+#include <list>
 #include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
+#include <queue>
 #include <set>
 #include <span>
 #include <variant>
-#include <list>
 
 namespace entropyman {
-//  class Optimiser {
-//  public:
-//    struct Node {
-//      std::map<std::string, std::vector<std::string_view>, std::less<>> layouts;
-//      size_t loss;
-
-//      Node remove_char(char guess, std::string_view empty_str) const {
-//        Node ret;
-//        ret.loss = loss;
-//        for (auto& [old_layout, old_wordlist] : layouts) {
-//          for (std::string_view word : old_wordlist) {
-//            auto positions = GameState::hangman_iter(word, guess);
-//            if (std::all_of(positions.begin(), positions.end(), [](auto i){ return !i; }))
-//              ++ret.loss;
-//            auto new_layout = old_layout;
-//            apply_positions(guess, positions, new_layout);
-
-//            ret.layouts[new_layout].emplace_back(word);
-//          }
-//        }
-
-//        if (auto iter = ret.layouts.find(empty_str); iter != ret.layouts.end())
-//          ret.loss += iter->second.size();
-//        else
-//          ret.loss = loss;
-
-//        return ret;
-//      }
-//    };
-//    struct EvalRes {
-//      char best;
-//      double entropy;
-//      size_t loss;
-//    };
-
-//  private:
-//    std::vector<std::map<std::string, Node, std::less<>>> nodes;
-//    std::string empty_str;
-//    std::string current_chars;
-//    std::string current_knowledge;
-
-//  private:
-//    void populate(std::string remaining_chars, Node const& node) {
-//      for (size_t i = 0; i < remaining_chars.size(); ++i) {
-//        std::string new_remaining;
-//        new_remaining.reserve(remaining_chars.size() - 1);
-//        std::copy(remaining_chars.begin(), remaining_chars.begin() + i, std::back_inserter(new_remaining));
-//        std::copy(remaining_chars.begin() + i + 1, remaining_chars.end(), std::back_inserter(new_remaining));
-//        auto [target_node, is_new] = lookup_or_create(new_remaining);
-//        if (!is_new)
-//          continue;
-
-//        char guess = remaining_chars[i];
-//        // If we get here, we must fill in this node ourselves
-//        *target_node = node.remove_char(guess, empty_str);
-//      }
-//    }
-//  public:
-//    /// Returns a tuple of the node and a boolean indicating if a new node was created for it
-//    std::pair<Node*, bool> lookup_or_create(std::string_view remaining_chars) {
-//      auto block = nodes.at(remaining_chars.size());
-//      auto iter = block.lower_bound(remaining_chars);
-//      if (iter != block.end() && iter->first == remaining_chars)
-//        return {&iter->second, false};
-//      return {&block.emplace_hint(iter)->second, true};
-//    }
-
-//    void prune(char discarded_char, positions_t const& positions) {
-//      current_chars.insert(std::lower_bound(current_chars.begin(), current_chars.end(), discarded_char), discarded_char);
-//      for (size_t i = 0; i < )
-//        current_knowledge[i]
-
-
-//      // First, we prune the previous block
-//      {
-//        auto& block = nodes.at(current_chars.size() - 1);
-//        auto path = block.extract(current_chars);
-//        block.clear();
-//        block.insert(std::move(path));
-//      }
-//      // Next, we prune future nodes that are now excluded
-//      for (auto i = current_chars.size(); i < nodes.size(); ++i) {
-//        auto& block = nodes[i];
-//        for (auto iter = block.begin(); iter != block.end();) {
-//          if (std::binary_search(iter->first.begin(), iter->first.end(), discarded_char)) {
-//            auto old_iter = iter;
-//            ++iter;
-//            block.erase(old_iter);
-//            continue;
-//          }
-
-//          ++iter;
-//        }
-//      }
-//    }
-
-//  public:
-//    Optimiser(GameState const& state, std::span<std::string_view> words);
-//  };
-
   class Optimiser {
   private:
     struct NodeSpec;
@@ -180,14 +81,14 @@ namespace entropyman {
       std::variant<leaf_t, parent_t> data;
       // TODO: allow threading
       mutable struct {
-        uint64_t last_generation = 0;
+        bool stale = true;
         char best_option = placeholder;
         double value;
       } cached_entropy;
+      std::weak_ptr<Node> parent;
 
     private:
-      double get_remaining_entropy_inner(uint64_t generation) const noexcept {
-        auto count = get_count();
+      double get_remaining_entropy_inner() const noexcept {
         // Win good
         if (is_won())
           return 0;
@@ -195,7 +96,7 @@ namespace entropyman {
         if (remaining_lives == 0)
           return (1ull<<32);
 
-        return std::visit([generation, this](auto& x) {
+        return std::visit([this](auto& x) {
           if constexpr (std::is_same_v<std::decay_t<decltype(x)>, leaf_t>) {
             return std::log2(x.size());
           }
@@ -204,7 +105,7 @@ namespace entropyman {
             for (auto& [guess, i] : x.children) {
               double new_best = 0;
               for (auto& [_, result] : i)
-                new_best += result->get_remaining_entropy(generation) * result->get_count();
+                new_best += result->get_remaining_entropy() * result->get_count();
               if (new_best < best) {
                 best = new_best;
                 cached_entropy.best_option = guess;
@@ -215,41 +116,39 @@ namespace entropyman {
         }, data);
       }
 
-      double get_remaining_entropy(uint64_t generation) const noexcept {
-        if (cached_entropy.last_generation >= generation)
-          return cached_entropy.value;
-        else {
-          cached_entropy.last_generation = generation;
-          return cached_entropy.value = get_remaining_entropy_inner(generation);
-        }
+      void get_remaining_words_inner(std::vector<std::string_view>& vec) const {
+        std::visit([&vec](auto& x) {
+          if constexpr (std::is_same_v<std::decay_t<decltype(x)>, leaf_t>)
+            vec.insert(vec.end(), x.begin(), x.end());
+          else {
+            // Minimise expansion
+            size_t min_width = std::numeric_limits<size_t>::max();
+            auto best_element = x.children.end();
+            for (auto iter = x.children.begin(); iter != x.children.end(); ++iter) {
+              if (iter->second.size() >= min_width)
+                continue;
+              best_element = iter;
+              min_width = best_element->second.size();
+            }
+            if (best_element == x.children.end())
+              throw std::runtime_error{"Tried to enumerate words from empty parent"};
+            for (auto& i : best_element->second)
+              i.second->get_remaining_words_inner(vec);
+          }
+        }, data);
       }
-    public: //private:
-//      std::pair<char, double> optimise_final(cache_t& cache, uint64_t generation) {
-//        expand(cache);
-//        char current_best = placeholder;
-//        double min_entropy = std::numeric_limits<double>::infinity();
-//        for (auto& [guess,results] : std::get<parent_t>(data).children) {
-//          // Uncomment if you are boring (sorry)
-//          size_t n_words = 0;
-//          for (auto i : results)
-//            n_words += i.second->get_count();
-//          if (n_words == 0)
-//            continue;
-//          double curr_entropy = 0.;
-//          for (auto& result : results)
-//            curr_entropy += result.second->get_remaining_entropy(generation) * result.second->get_count();
-//          curr_entropy /= get_count();
-//          auto x = results.size();
-//          if (curr_entropy < min_entropy) {
-//            current_best = guess;
-//            min_entropy = curr_entropy;
-//          }
-//        }
-//        if (current_best == placeholder)
-//          throw std::runtime_error{"All optimisation paths pessimal"};
-//        return {current_best, min_entropy};
-//      }
+      void mark_stale() noexcept {
+        cached_entropy.stale = true;
+        if (auto ptr = parent.lock())
+          ptr->mark_stale();
+      }
+
     public:
+      std::vector<std::string_view> get_remaining_words() const {
+        std::vector<std::string_view> ret;
+        get_remaining_words_inner(ret);
+        return ret;
+      }
       std::pair<char, double> get_best() const {
         if (!std::holds_alternative<parent_t>(data))
           throw std::logic_error{"Best before expansion!"};
@@ -257,7 +156,7 @@ namespace entropyman {
         return {cached_entropy.best_option, entropy};
       }
       constexpr size_t get_count() const noexcept {
-        return std::visit([](auto x) -> size_t {
+        return std::visit([](auto& x) -> size_t {
           if constexpr (std::is_same_v<std::decay_t<decltype(x)>, leaf_t>)
             return x.size();
           else
@@ -266,19 +165,16 @@ namespace entropyman {
       }
       constexpr auto get_lives() const noexcept { return remaining_lives; }
       constexpr bool is_won() const noexcept { return knowledge.find(placeholder) == knowledge.npos; }
-      constexpr std::optional<double> get_cached_entropy() {
-        return cached_entropy.last_generation == 0 ? std::nullopt : std::optional<double>{cached_entropy.value};
-      }
-
-      constexpr uint64_t get_next_generation() const noexcept {
-        return cached_entropy.last_generation + 1;
-      }
       double get_remaining_entropy() const noexcept {
-        return get_remaining_entropy(cached_entropy.last_generation + 1);
+        if (!cached_entropy.stale)
+          return cached_entropy.value;
+
+        cached_entropy.stale = false;
+        return cached_entropy.value = get_remaining_entropy_inner();
       }
 
-      bool is_better_than(Node const& other, uint64_t generation) const noexcept {
-        auto _1 = get_remaining_entropy(generation) <=> other.get_remaining_entropy(generation);
+      bool is_better_than(Node const& other) const noexcept {
+        auto _1 = get_remaining_entropy() <=> other.get_remaining_entropy();
         if (std::is_lt(_1))
           return true;
         else if (std::is_gt(_1))
@@ -303,6 +199,9 @@ namespace entropyman {
         }
         parent_t& parent = data.emplace<parent_t>();
         parent.n_words = words.size();
+
+        // Now we are changing the type of node, we have to mark it stale
+        mark_stale();
 
         for (size_t guess_idx = 0; guess_idx != remaining_chars.size(); ++guess_idx) {
           auto guess = remaining_chars[guess_idx];
@@ -351,7 +250,6 @@ namespace entropyman {
       std::shared_ptr<Node> get(char guess, positions_t const& pos, cache_t& cache) {
         if (!std::holds_alternative<parent_t>(data))
           expand(cache);
-        auto res = std::get<parent_t>(data).children.at(guess).at(pos);
         return std::get<parent_t>(data).children.at(guess).at(pos);
       }
 
@@ -365,27 +263,16 @@ namespace entropyman {
 //  private:
 
   private:
-    static constexpr auto opt_cmp = [](std::shared_ptr<Node> const& i, std::shared_ptr<Node> const& j)  {return i->get_remaining_entropy() < j->get_remaining_entropy();};
+    static constexpr auto opt_cmp = [](std::shared_ptr<Node> const& i, std::shared_ptr<Node> const& j) {
+      if (i == j)
+        return false;
+      // <= so that
+      return i->get_remaining_entropy() <= j->get_remaining_entropy();
+    };
     using opt_queue_t = std::set<std::shared_ptr<Node>, decltype(opt_cmp)>;
   public:
     cache_t cache;
     std::shared_ptr<Node> root;
-
-  private:
-//    template<typename T>
-//    void optimise_inner(T&& expanded, size_t depth = 5, opt_queue_t& opt) {
-//      std::set<std::pair<double, std::shared_ptr<Node>>, decltype(cmp)> ;
-//      if (depth == 0 || cache.size() > 200000)
-//        return;
-//      for (auto& [guess, responses] : expanded)
-//        for (auto& [pos, child] : responses)
-//          if (child->get_lives() > 0)
-//            child->expand(cache);
-//      for (auto& [guess, responses] : expanded)
-//        for (auto& [pos, child] : responses)
-//          if (child->get_lives() > 0)
-//            optimise_inner(child->expand(cache), depth - 1);
-//    }
 
   public:
     constexpr size_t get_cache_size() const noexcept { return cache.size(); }
@@ -396,27 +283,28 @@ namespace entropyman {
     }
 
     std::pair<char, double> optimise() {
-      uint64_t max_steps = 100000;
+      if (root->get_remaining_entropy() == 0) {
+        root->expand(cache);
+        return root->get_best();
+      }
 
       opt_queue_t opt_queue{root};
 
-      for (uint64_t step = 0; step < max_steps && !opt_queue.empty(); ++step) {
-        auto iter = opt_queue.begin();
-        auto best = *iter;
-        opt_queue.erase(iter);
+      auto start = std::chrono::steady_clock::now();
+      std::chrono::steady_clock::time_point stop;
+      static constexpr std::chrono::seconds think_time{5};
 
-        if (best->is_expanded() || best->is_won()) {
-          --step;
+      for (uint64_t step = 0; !opt_queue.empty() && (step % 1000 != 0 || std::chrono::steady_clock::now() - start < think_time); ++step) {
+        auto front = opt_queue.extract(opt_queue.begin());
+        auto& best = front.value();
+
+        if (best->is_won())
           continue;
-        }
         for (auto& [guess, responses] : best->expand(cache))
           for (auto& [pos, child] : responses)
-            if (child->get_lives() > 0 && child->get_count() > 0 && !child->is_expanded() && !child->is_won())
+            if (child->get_lives() > 0 && child->get_count() > 0 /*&& !child->is_expanded()*/ && !child->is_won())
               opt_queue.emplace(child);
       }
-
-//      optimise_inner(root->expand(cache));
-
       return root->get_best();
     }
 

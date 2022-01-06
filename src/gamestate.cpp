@@ -1,5 +1,7 @@
 #include "gamestate.hpp"
 
+#include <algorithm>
+
 namespace entropyman {
   positions_t GameState::hangman_iter(std::string_view word, char guess) {
     positions_t ret(word.size(), false);

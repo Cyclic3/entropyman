@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
 
     std::cout << "\nResult: " << std::flush;
     std::getline(std::cin, line);
+//        line = "teddy";
 
     entropyman::positions_t positions(word_len, false);
     for (size_t i = 0; i < line.size(); ++i)
