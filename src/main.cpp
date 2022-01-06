@@ -13,9 +13,10 @@
 #include "gamestate.hpp"
 #include "optimiser.hpp"
 
+#include <charconv>
+#include <cstring>
 #include <iostream>
 #include <fstream>
-#include <charconv>
 
 int main(int argc, char** argv) {
   if (argc != 3) {
@@ -29,7 +30,7 @@ int main(int argc, char** argv) {
 
   size_t word_len;
   {
-    auto res = std::from_chars(argv[2], nullptr, word_len, 10);
+    auto res = std::from_chars(argv[2], argv[2] + ::strlen(argv[2]), word_len, 10);
     if (static_cast<int>(res.ec) != 0)
       throw std::runtime_error{"Invalid word length"};
   }
