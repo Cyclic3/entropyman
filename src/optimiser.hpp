@@ -272,7 +272,7 @@ namespace entropyman {
     std::shared_ptr<Node> root;
 
   public:
-    constexpr size_t get_cache_size() const noexcept { return cache.size(); }
+    inline size_t get_cache_size() const noexcept { return cache.size(); }
 
     void update(char guess, positions_t const& pos) {
       root = root->get(guess, pos, cache);
