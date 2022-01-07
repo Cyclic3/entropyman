@@ -61,7 +61,7 @@ namespace entropyman {
           return a.knowledge <=> b.knowledge;
       }
     };
-    class Node {
+    class Node : private std::enable_shared_from_this<Node> {
     private:
       using leaf_t = std::vector<std::string_view>;
       struct parent_t {
@@ -225,6 +225,7 @@ namespace entropyman {
             if (!is_new) {
               throw std::logic_error{"Somehow encountered word twice???"};
             }
+            iter->second->parent = weak_from_this();
 
             auto& target = parent.children[guess][pos];
             auto& target_words = std::get<leaf_t>(target->data);
